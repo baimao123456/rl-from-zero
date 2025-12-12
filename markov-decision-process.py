@@ -21,8 +21,8 @@ def compute_return(start_index, chain, gamma):
     G = 0
     for i in reversed(range(start_index, len(chain))):
         G = gamma * G + rewards[chain[i] - 1]
+        print(G)
     return G
-
 
 # 一个状态序列,s1-s2-s3-s6
 chain = [1, 2, 3, 6]

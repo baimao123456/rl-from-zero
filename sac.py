@@ -265,7 +265,7 @@ class SAC:
         next_probs = self.actor(next_states)
         next_log_probs = torch.log(next_probs + 1e-8)
         entropy = -torch.sum(next_probs * next_log_probs, dim=1, keepdim=True)
-        q1_value = self.target_critic_1(next_states)
+        q1_value = self.target_critic_1(next_states) # (B,A)
         q2_value = self.target_critic_2(next_states)
         min_qvalue = torch.sum(next_probs * torch.min(q1_value, q2_value),
                                dim=1,

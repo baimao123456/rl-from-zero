@@ -72,6 +72,7 @@ class DDPG:
         next_states = torch.tensor(transition_dict['next_states'], dtype=torch.float).to(self.device)
         dones = torch.tensor(transition_dict['dones'], dtype=torch.float).view(-1, 1).to(self.device)
 
+        # self.target_actor(next_states)表示的是q值最大的动作
         next_q_values = self.target_critic(next_states, self.target_actor(next_states))
         q_targets = rewards + self.gamma * next_q_values * (1 - dones)
         critic_loss = torch.mean(F.mse_loss(self.critic(states, actions), q_targets))
@@ -79,6 +80,7 @@ class DDPG:
         critic_loss.backward()
         self.critic_optimizer.step()
 
+        # 这里涉及到链式求导，Q(critic)先对a(actor)求导, a再对theta求导
         actor_loss = -torch.mean(self.critic(states, self.actor(states)))
         self.actor_optimizer.zero_grad()
         actor_loss.backward()

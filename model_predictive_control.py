@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 class CEM:
     def __init__(self, n_sequence, elite_ratio, fake_env, upper_bound,
                  lower_bound):
-        # 生成的序列长度
+        # 每个时间节点生成的动作序列个数
         self.n_sequence = n_sequence
         # 选取top动作的比例
         self.elite_ratio = elite_ratio
@@ -23,11 +23,11 @@ class CEM:
         self.fake_env = fake_env
 
     def optimize(self, state, init_mean, init_var):
-        # 策略初始分布参数
+        # 策略初始分布参数, init_mean和init_var的维度为(plan_horizon,1)
         mean, var = init_mean, init_var
-        # 均值为0, 方差为1的标准截断正太分布
+        # 均值为0, 方差为1的标准截断正太分布, shape=[plan_horizon, 1]
         X = truncnorm(-2, 2, loc=np.zeros_like(mean), scale=np.ones_like(var))
-        # 初始化每个序列的状态
+        # 初始化每个序列的状态, shape=[n_sequence, plan_horizon]
         state = np.tile(state, (self.n_sequence, 1))
 
         for _ in range(5):
@@ -36,10 +36,11 @@ class CEM:
             constrained_var = np.minimum(
                 np.minimum(np.square(lb_dist / 2), np.square(ub_dist / 2)),
                 var)
-            # 生成动作序列, 重参数化技巧, 先从单位高斯分布采样, 再把采样值乘以标准差后加上均值, 可认为是从策略高斯分布采样;
+            # 生成n_sequence个长度为plan_horizon的动作序列, shape=[n_sequence, plan_horizon]
+            # 利用重参数化技巧, 先从单位高斯分布采样, 再把采样值乘以标准差后加上均值, 可认为是从策略高斯分布采样; 
             action_sequences = [X.rvs() for _ in range(self.n_sequence)
                                 ] * np.sqrt(constrained_var) + mean
-            # 计算每条动作序列的累积奖励
+            # 计算每条动作序列的累积奖励, 并返回每个动作序列的第一个reward, shape=[n_sequence, 1]
             returns = self.fake_env.propagate(state, action_sequences)[:, 0]
             # 选取累积奖励最高的若干条动作序列
             elites = action_sequences[np.argsort(
@@ -240,6 +241,7 @@ class EnsembleDynamicsModel:
         self._epoch_since_last_update = 0 if updated else self._epoch_since_last_update + 1
         return self._epoch_since_last_update > 5
 
+    # input: [state, action], output: [reward, next_state]
     def predict(self, inputs, batch_size=64):
         mean, var = [], []
         for i in range(0, inputs.shape[0], batch_size):
@@ -257,11 +259,14 @@ class FakeEnv:
     def __init__(self, model):
         self.model = model
 
+    # 对某个时间步的state和action预估当前步的reward和新的state
     def step(self, obs, act):
+        # 环境模型的输入是将state和action进行拼接, 输出为rewards和next_state的拼接
         inputs = np.concatenate((obs, act), axis=-1)
         ensemble_model_means, ensemble_model_vars = self.model.predict(inputs)
         ensemble_model_means[:, :, 1:] += obs.numpy()
         ensemble_model_stds = np.sqrt(ensemble_model_vars)
+        # 对分布进行还原
         ensemble_samples = ensemble_model_means + np.random.normal(
             size=ensemble_model_means.shape) * ensemble_model_stds
 
@@ -280,11 +285,16 @@ class FakeEnv:
             obs = np.copy(obs)
             total_reward = np.expand_dims(np.zeros(obs.shape[0]), axis=-1)
             obs, actions = torch.as_tensor(obs), torch.as_tensor(actions)
+            # obs: 初始状态[n_sequence, state_dim], actions: [n_sequence, plan_horizon]
+            # 遍历每个时间步，通过环境模型预估reward和next_state, 更新obs和累加reward
             for i in range(actions.shape[1]):
+                # 每个时间步都会对obs进行更新, 并选择所有序列在当前时间步的action
                 action = torch.unsqueeze(actions[:, i], 1)
                 rewards, next_obs = self.step(obs, action)
+                # 将每个动作序列的不同时间节点的reward进行累加
                 total_reward += rewards
                 obs = torch.as_tensor(next_obs)
+            # total_reward.shape: [n_sequence, 1]
             return total_reward
         
 class ReplayBuffer:
@@ -336,6 +346,7 @@ class PETS:
         actions = np.array(env_samples[1])
         rewards = np.array(env_samples[2]).reshape(-1, 1)
         next_obs = env_samples[3]
+        # 环境模型: input: [state, action], label: [reward, next_state]
         inputs = np.concatenate((obs, actions), axis=-1)
         labels = np.concatenate((rewards, next_obs - obs), axis=-1)
         self._model.train(inputs, labels)
@@ -345,6 +356,7 @@ class PETS:
     # 2. 使用cem产出的action和真实env进行交互, 得到真实reward和next_state
     # 3. 将真实交互数据保存到_env_pool, 用来后续训练环境模型
     def mpc(self):
+        # 根据动作空间的lower_bound和upper_bound设置动作分布的mean和var
         mean = np.tile((self.upper_bound + self.lower_bound) / 2.0,
                        self.plan_horizon)
         var = np.tile(
@@ -384,7 +396,7 @@ class PETS:
 
     def train(self):
         return_list = []
-        explore_return = self.explore()  # 先进行随机策略的探索来收集一条序列的数据
+        explore_return = self.explore()  # 先进行随机策略的探索来收集一条序列的数据, 用来训练环境模型
         print('episode: 1, return: %d' % explore_return)
         return_list.append(explore_return)
 
@@ -396,10 +408,14 @@ class PETS:
             return_list.append(episode_return)
             print('episode: %d, return: %d' % (i_episode + 2, episode_return))
         return return_list
-    
+
+# 动作回放空间的大小
 buffer_size = 100000
+# 每个时间节点生成的序列个数
 n_sequence = 50
+# 每次选取全部序列的20%进行动作参数更新
 elite_ratio = 0.2
+# 每个动作序列的长度
 plan_horizon = 25
 num_episodes = 10
 env_name = 'Pendulum-v1'

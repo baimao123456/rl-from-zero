@@ -1,4 +1,6 @@
 # CQL conservative Q-learning
+# 代码解读：https://zhuanlan.zhihu.com/p/603691759
+# https://github.com/rail-berkeley/rlkit
 import numpy as np
 import gymnasium as gym
 from tqdm import tqdm
@@ -263,16 +265,22 @@ class CQL:
 
         # 以上与SAC相同,以下Q网络更新是CQL的额外部分
         batch_size = states.shape[0]
+        # 计算采样的action以及对应的log_prob，分别来自于均匀分布、当前state的高斯分布以及下一个state的高斯分布
+        # 1. 在均匀分布中采样N个点
         random_unif_actions = torch.rand(
             [batch_size * self.num_random, actions.shape[-1]],
             dtype=torch.float).uniform_(-1, 1).to(device)
+        # 表示得到均匀分布的log_prob
         random_unif_log_pi = np.log(0.5**next_actions.shape[-1])
+        # 2. 在当前state的分布中，采样N个点
         tmp_states = states.unsqueeze(1).repeat(1, self.num_random,
                                                 1).view(-1, states.shape[-1])
+        random_curr_actions, random_curr_log_pi = self.actor(tmp_states)
+        # 3. 在下一个state的分布中，采样N个点
         tmp_next_states = next_states.unsqueeze(1).repeat(
             1, self.num_random, 1).view(-1, next_states.shape[-1])
-        random_curr_actions, random_curr_log_pi = self.actor(tmp_states)
         random_next_actions, random_next_log_pi = self.actor(tmp_next_states)
+        # 计算Q(s,a), 直接将上边采样到的(s,a)输入到critic中, 得到q1_unif, q1_curr, q1_next
         q1_unif = self.critic_1(tmp_states, random_unif_actions).view(
             -1, self.num_random, 1)
         q2_unif = self.critic_2(tmp_states, random_unif_actions).view(
@@ -285,6 +293,7 @@ class CQL:
             -1, self.num_random, 1)
         q2_next = self.critic_2(tmp_states, random_next_actions).view(
             -1, self.num_random, 1)
+        # ！！！最重要的部分，计算CQL的损失函数
         q1_cat = torch.cat([
             q1_unif - random_unif_log_pi,
             q1_curr - random_curr_log_pi.detach().view(-1, self.num_random, 1),
